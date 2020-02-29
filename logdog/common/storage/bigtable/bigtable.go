@@ -141,10 +141,12 @@ func (bti prodBTIface) dropRowRange(c context.Context, rk *rowKey) error {
 	keyC := make(chan string)
 
 	// TODO(iannucci): parallelize row scan?
+
+	// buffered to avoid deadlocking main thread below
 	readerC := make(chan error, 1)
 	go func() {
-		defer close(keyC)
 		defer close(readerC)
+		defer close(keyC)
 		readerC <- logTable.ReadRows(c, rng, func(row bigtable.Row) bool {
 			keyC <- row.Key()
 			return true
@@ -173,8 +175,10 @@ func (bti prodBTIface) dropRowRange(c context.Context, rk *rowKey) error {
 			return err
 		}
 
+		logging.Infof(c, "dropRowRange: dropping %d rows", len(batch))
 		errs, err := logTable.ApplyBulk(c, batch, allMuts[:len(batch)])
 		if err != nil {
+			logging.WithError(err).Errorf(c, "dropRowRange: ApplyBulk failed")
 			return errors.Annotate(err, "ApplyBulk failed on batch %d", batchNum).Err()
 		}
 		if len(errs) > 0 {
